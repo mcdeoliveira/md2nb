@@ -21,6 +21,9 @@ Maybe a block with two lines:
     f[x]+1;
 	Expand[f[x]+1];
 
+Or a long line that will span more than one line and will force a linebreak 
+in the middle.
+
 And an numbered list:
 
 1. Some item
@@ -39,5 +42,5 @@ a & b \\ c & d
 \end{bmatrix}
 $$
 
-That's it for now a!
+That's it for now "here and there and everywhere"!
 

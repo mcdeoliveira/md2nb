@@ -1,356 +1,221 @@
--- This is a sample custom writer for pandoc.  It produces output
--- that is very similar to that of pandoc's HTML writer.
--- There is one new feature: code blocks marked with class 'dot'
--- are piped through graphviz and images are included in the HTML
--- output using 'data:' URLs.
---
--- Invoke with: pandoc -t sample.lua
---
--- Note:  you need not have lua installed on your system to use this
--- custom writer.  However, if you do have lua installed, you can
--- use it to test changes to the script.  'lua sample.lua' will
--- produce informative error messages if your code contains
--- syntax errors.
+-- This is a sample custom writer for pandoc, using Layout to
+-- produce nicely wrapped output.
 
--- Character escaping
-local function escape(s, in_attribute)
-  return s:gsub("[<>&\"']",
-    function(x)
-      if x == '<' then
-        return '<'
-      elseif x == '>' then
-        return '>'
-      elseif x == '&' then
-        return '&'
-      elseif x == '"' then
-        return '"'
-      elseif x == "'" then
-	 return "'"
-      else
-        return x
-      end
-    end)
-end
+local layout = pandoc.layout
+local text = pandoc.text
+local type = pandoc.utils.type
 
--- Character math escaping
-local function mescape(s, in_attribute)
-  return s:gsub("\\",
-    function(x)
-      if x == '\\' then
-        return '\\\\'
-      else
-        return x
-      end
-    end)
-end
-
--- Helper function to convert an attributes table into
--- a string that can be put into HTML tags.
-local function attributes(attr)
-  local attr_table = {}
-  for x,y in pairs(attr) do
-    if y and y ~= "" then
-      table.insert(attr_table, ' ' .. x .. '="' .. escape(y,true) .. '"')
-    end
-  end
-  return table.concat(attr_table)
-end
-
--- Run cmd on a temporary file containing inp and return result.
-local function pipe(cmd, inp)
-  local tmp = os.tmpname()
-  local tmph = io.open(tmp, "w")
-  tmph:write(inp)
-  tmph:close()
-  local outh = io.popen(cmd .. " " .. tmp,"r")
-  local result = outh:read("*all")
-  outh:close()
-  os.remove(tmp)
-  return result
-end
+local l = layout.literal
 
 -- Table to store footnotes, so they can be included at the end.
-local notes = {}
+local notes = pandoc.List()
 
--- Blocksep is used to separate block elements.
-function Blocksep()
-   -- return "\n\n"
-   return "\n"
+-- Dispatch table for AST element writers
+local dispatch = {}
+local function write (elem)
+   if type(elem) == 'Block' or type(elem) == 'Inline' then
+      return (
+	 dispatch[elem.t] or dispatch[type(elem)] or
+	 error(('No function to convert %s (%s)'):format(elem.t, type(elem)))
+      )(elem)  -- call dispatch function with element
+   elseif type(elem) == 'Inlines' then
+      return layout.concat(elem:map(write), ', ')
+   elseif type(elem) == 'Blocks' then
+      return layout.concat(elem:map(write), ',\n')
+   end
+   error('cannot convert unknown type: ' .. type(element))
 end
 
--- This function is called once for the whole document. Parameters:
--- body is a string, metadata is a table, variables is a table.
--- One could use some kind of templating
--- system here; this just gives you a simple standalone HTML file.
-function Doc(body, metadata, variables)
-  local buffer = {}
-  local function add(s)
-    table.insert(buffer, s)
-  end
-  local function remove()
-    table.remove(buffer, 1)
-  end
-  add('Notebook[{')
-  if metadata['title'] and metadata['title'] ~= "" then
-     add('Cell[TextData[{' .. metadata['title'] .. '}], "Title"],')
-  end
-  if metadata['author'] and metadata['author'] ~= "" then
-     add('Cell["Authors:", "Text"],')
-     for _, author in pairs(metadata['author'] or {}) do
-	add('Cell[TextData[{' .. author .. '}], "Text"],')
-     end
-  end
-  if metadata['date'] and metadata['date'] ~= "" then
-     add('Cell["Date:", "Text"],')
-     add('Cell[TextData[{' .. metadata.date .. '}], "Text"],')
-  end
-  add(body)
-  if #notes > 0 then
-     add('Cell["Notes", "Section"];')
-     for _,note in pairs(notes) do
-	add(note)
-     end
-  end
-  add('Cell["Converted using pandoc + md2nb", "Text"]')
-  add('}]')
-  return table.concat(buffer,'\n')
+local function escapeTeX(s)
+   return s:gsub('\\', '\\\\')
 end
 
--- The functions that follow render corresponding pandoc elements.
--- s is always a string, attr is always a table of attributes, and
--- items is always an array of strings (the items in a list).
--- Comments indicate the types of other variables.
-
-function Str(s)
-   return '"' .. escape(s) .. '"'
+local function escape(s)
+   return s:gsub('"', '\\"'):gsub('’', "'")
 end
 
-function Space()
-  return ', " ", '
+function dispatch.Str(s)
+   return '"' .. escape(s.text) .. '"'
 end
 
-function SoftBreak()
-  return "\n"
+function dispatch.Space()
+   return '" "'
 end
 
-function LineBreak()
-  return "\n"
+function dispatch.SoftBreak()
+   return '" "'
 end
 
-function Emph(s)
-   -- return "<em>" .. s .. "</em>"
-   return 'StyleBox[' .. s .. ', FontSlant->"Italic"]'
+function dispatch.LineBreak()
+   return layout.cr
 end
 
-function Strong(s)
-   -- return "<strong>" .. s .. "</strong>"
-   return 'StyleBox[' .. s .. ', FontWeight->"Bold"]'
+function dispatch.Emph(e)
+   return 'StyleBox[Cell[TextData[{' .. write(e.content) .. '}]], FontSlant->"Italic"]'
 end
 
-function Subscript(s)
-  return "<sub>" .. s .. "</sub>"
+function dispatch.Strong(s)
+   return 'StyleBox[Cell[TextData[{' .. write(s.content) .. '}]], FontWeight->"Bold"]'
 end
 
-function Superscript(s)
-  return "<sup>" .. s .. "</sup>"
+function dispatch.Subscript(s)
+   return "~" .. write(s.content) .. "~"
 end
 
-function SmallCaps(s)
-  return '<span style="font-variant: small-caps;">' .. s .. '</span>'
+function dispatch.Superscript(s)
+   return "^" .. write(s.content) .. "^"
 end
 
-function Strikeout(s)
-  return '<del>' .. s .. '</del>'
+function dispatch.SmallCaps(s)
+   return text.upper(s)
 end
 
-function Link(s, src, tit)
-  return "<a href='" .. escape(src,true) .. "' title='" ..
-         escape(tit,true) .. "'>" .. s .. "</a>"
+function dispatch.Strikeout(s)
+   return 'Style[' .. write(s.content) .. ', Struckthrough]'
 end
 
-function Image(s, src, tit)
-  return "<img src='" .. escape(src,true) .. "' title='" ..
-         escape(tit,true) .. "'/>"
+function dispatch.Link(link)
+   local title = link.title == ''
+      and ''
+      or ' "' .. link.title:gsub('"', '\\"') .. '"'
+   -- return write(link.content) .. ', " ", ' ..
+   --    '"(* ' .. l(link.target .. title) .. ' *)"'
+   return 'Cell[Hyperlink[' .. dispatch.Emph(link) .. ', "' ..
+      l(link.target:gsub('#', '')) .. '"]]'
 end
 
-function Code(s, attr)
-   -- return "<code" .. attributes(attr) .. ">" .. escape(s) .. "</code>"
-   return 'Cell[BoxData[FormBox[RowBox[{"' .. s .. '"}], TraditionalForm]]]'
+function dispatch.Image(img)
+   local title = img.title == ''
+      and ''
+      or ' ' .. title:gsub('"', '\\"')
+   return '!' .. write(pandoc.Inlines(img.content)):brackets() .. l(img.src .. title):parens()
 end
 
-function InlineMath(s)
-   -- return "\\(" .. escape(s) .. "\\)"
-   return 'Cell[ToExpression["' .. mescape(s) .. '", TeXForm]]'
+function dispatch.Code(code)
+   return 'Cell[BoxData[FormBox[RowBox[{"' .. code.text .. '"}], TraditionalForm]]]'
 end
 
-function DisplayMath(s)
-   -- return "\\[" .. escape(s) .. "\\]"
-   return InlineMath(s)
+function dispatch.Math (m)
+   if m.mathtype == 'InlineMath' then
+      return 'Cell[ToExpression["' .. l(m.text) .. '", TeXForm]]'
+   else
+      return 'Cell[ToExpression["' .. l(escapeTeX(m.text)) .. '", TeXForm]]'
+   end
 end
 
-function Note(s)
-  local num = #notes + 1
-  -- insert the back reference right before the final closing tag.
-  s = string.gsub(s,
-          '(.*)</', '%1 <a href="#fnref' .. num ..  '">&#8617;</a></')
-  -- add a list item with the note to the note table.
-  table.insert(notes, '<li id="fn' .. num .. '">' .. s .. '</li>')
-  -- return the footnote reference, linked to the note.
-  return '<a id="fnref' .. num .. '" href="#fn' .. num ..
-            '"><sup>' .. num .. '</sup></a>'
+function dispatch.Quoted(q)
+   return '"\\"", ' .. write(q.content) .. ', "\\""'
 end
 
-function Span(s, attr)
-   return "<span" .. attributes(attr) .. ">" .. s .. "</span>"
+function dispatch.Note(n)
+   notes:insert(write(n.content))
+   return '(* See [^' .. tostring(#notes) .. '] *)'
 end
 
-function Plain(s)
-   -- return s
-   return 'TextData[{' .. s .. '}]'
+function dispatch.Span(s)
+   return write(s.content)
 end
 
-function Para(s)
-   -- return "<p>" .. s .. "</p>"
-   return 'Cell[TextData[{' .. s .. '}], "Text"],'
+function dispatch.RawInline(raw)
+   return raw.format == "markdown" and raw.text or ''
 end
 
--- lev is an integer, the header level.
-function Header(lev, s, attr)
-   -- return "<h" .. lev .. attributes(attr) ..  ">" .. s .. "</h" .. lev .. ">"
-   -- TODO: Handle levels properly
+function dispatch.Cite (cite)
+   return write(cite.content)
+end
+
+function dispatch.Plain(p)
+   return write(p.content)
+end
+
+function dispatch.Para(p)
+   return 'Cell[TextData[{' .. write(p.content) .. '}], "Text"]'
+end
+
+function dispatch.Header(header)
    local levels = { 'Section', 'Subsection', 'Subsubsection', 'Text', 'Text' }
-   return 'Cell[TextData[{' .. s .. '}], "' .. levels[lev] .. '"],'
+   return 'Cell[TextData[{' ..
+      write(header.content) ..
+      '}], "' .. levels[header.level] .. '"]'
 end
 
-function BlockQuote(s)
-  return "<blockquote>\n" .. s .. "\n</blockquote>"
+function dispatch.BlockQuote(bq)
+   return 'CellGroupData[{' .. write(bq.content) .. '}]'
 end
 
-function HorizontalRule()
-  return "<hr/>"
+function dispatch.HorizontalRule()
+   return string.rep('- ', 7) .. '-'
 end
 
-function CodeBlock(s, attr)
-   -- -- If code block has class 'dot', pipe the contents through dot
-   -- -- and base64, and include the base64-encoded png as a data: URL.
-   -- if attr.class and string.match(' ' .. attr.class .. ' ',' dot ') then
-   --   local png = pipe("base64", pipe("dot -Tpng", s))
-   --   return '<img src="data:image/png;base64,' .. png .. '"/>'
-   -- -- otherwise treat as code (one could pipe through a highlighter)
-   -- else
-   -- return "<pre><code" .. attributes(attr) .. ">" .. escape(s) ..
-   --        "</code></pre>"
-   return 'Cell["' .. escape(s) .. '", "Input"],'
+function dispatch.LineBlock(ls)
+   return '<div style="white-space: pre-line;">'
+      .. layout.concat(ls.content:map(write), layout.cr)
+      .. '</div>'
 end
 
-function BulletList(items)
-   local buffer = {}
-   -- for _, item in pairs(items) do
-   --   table.insert(buffer, "<li>" .. item .. "</li>")
-   -- end
-   -- return "<ul>\n" .. table.concat(buffer, "\n") .. "\n</ul>"
-   for _, item in pairs(items) do
-      table.insert(buffer, 'Cell[' .. item .. ', "Item"],');
+function dispatch.CodeBlock(cb)
+   return 'Cell["' .. l(cb.text) .. '", ' ..
+      (cb.classes[1] == 'output' and '"Output"' or '"Input"') .. ']'
+end
+
+function dispatch.BulletList(blist)
+   local result = pandoc.List()
+   for i, item in ipairs(blist.content) do
+      result:insert('Cell[TextData[{' .. write(item) .. '}], "Item"]')
    end
-   return table.concat(buffer, "\n")
+   return layout.concat(result, ",\n")
 end
 
-function OrderedList(items)
-   local buffer = {}
-   -- for _, item in pairs(items) do
-   --   table.insert(buffer, "<li>" .. item .. "</li>")
-   -- end
-   -- return "<ol>\n" .. table.concat(buffer, "\n") .. "\n</ol>"
-   for _, item in pairs(items) do
-      table.insert(buffer, 'Cell[' .. item .. ', "ItemNumbered"],');
+function dispatch.OrderedList(olist)
+   local result = pandoc.List()
+   for i, item in ipairs(olist.content) do
+      result:insert('Cell[TextData[{' .. write(item) .. '}], "ItemNumbered"]')
    end
-   return table.concat(buffer, "\n")
+   return layout.concat(result, ",\n")
 end
 
--- Revisit association list STackValue instance.
-function DefinitionList(items)
-  local buffer = {}
-  for _,item in pairs(items) do
-    for k, v in pairs(item) do
-      table.insert(buffer,"<dt>" .. k .. "</dt>\n<dd>" ..
-                        table.concat(v,"</dd>\n<dd>") .. "</dd>")
-    end
-  end
-  return "<dl>\n" .. table.concat(buffer, "\n") .. "\n</dl>"
+function dispatch.DefinitionList(dlist)
+   local result = pandoc.List()
+   for i, item in ipairs(dlist.content) do
+      local key = write(item[1])
+      local value = layout.concat(
+	 item[2]:map(write),
+	 layout.blankline
+      )
+      result:insert(key / value:hang(4, ':   '))
+   end
+   return layout.concat(result, layout.blankline)
 end
 
--- Convert pandoc alignment to something HTML can use.
--- align is AlignLeft, AlignRight, AlignCenter, or AlignDefault.
-function html_align(align)
-  if align == 'AlignLeft' then
-    return 'left'
-  elseif align == 'AlignRight' then
-    return 'right'
-  elseif align == 'AlignCenter' then
-    return 'center'
-  else
-    return 'left'
-  end
+function dispatch.Table(tbl)
+   return l'TABLE NOT CONVERTED'
 end
 
--- Caption is a string, aligns is an array of strings,
--- widths is an array of floats, headers is an array of
--- strings, rows is an array of arrays of strings.
-function Table(caption, aligns, widths, headers, rows)
-  local buffer = {}
-  local function add(s)
-    table.insert(buffer, s)
-  end
-  add("<table>")
-  if caption ~= "" then
-    add("<caption>" .. caption .. "</caption>")
-  end
-  if widths and widths[1] ~= 0 then
-    for _, w in pairs(widths) do
-      add('<col width="' .. string.format("%d%%", w * 100) .. '" />')
-    end
-  end
-  local header_row = {}
-  local empty_header = true
-  for i, h in pairs(headers) do
-    local align = html_align(aligns[i])
-    table.insert(header_row,'<th align="' .. align .. '">' .. h .. '</th>')
-    empty_header = empty_header and h == ""
-  end
-  if empty_header then
-    head = ""
-  else
-    add('<tr class="header">')
-    for _,h in pairs(header_row) do
-      add(h)
-    end
-    add('</tr>')
-  end
-  local class = "even"
-  for _, row in pairs(rows) do
-    class = (class == "even" and "odd") or "even"
-    add('<tr class="' .. class .. '">')
-    for i,c in pairs(row) do
-      add('<td align="' .. html_align(aligns[i]) .. '">' .. c .. '</td>')
-    end
-    add('</tr>')
-  end
-  add('</table')
-  return table.concat(buffer,'\n')
+function dispatch.RawBlock(raw)
+   return raw.format == 'markdown' and raw.text or layout.empty
 end
 
-function Div(s, attr)
-  return "<div" .. attributes(attr) .. ">\n" .. s .. "</div>"
+function dispatch.Div(div)
+   return write(div.content)
 end
 
--- The following code will produce runtime warnings when you haven't defined
--- all of the functions you need for the custom writer, so it's useful
--- to include when you're working on a writer.
-local meta = {}
-meta.__index =
-  function(_, key)
-    io.stderr:write(string.format("WARNING: Undefined function '%s'\n",key))
-    return function() return "" end
-  end
-setmetatable(_G, meta)
+Extensions = {
+  smart = false,
+  citations = false,
+  foobar = false
+}
 
+function Writer(doc, opts)
+   local buffer = pandoc.List()
+   buffer:insert(write(doc.blocks))
+   for i, note in ipairs(notes) do
+      buffer:insert(
+	 ',' .. layout.cr ..
+	 'Cell["(* [^' .. tostring(i) .. ']: *)", "Text"],' .. layout.cr ..
+	 note
+      )
+   end
+   local body = 'Notebook[{\n' .. layout.concat(buffer, layout.cr) .. layout.cr .. '}]'
+
+   return body:render()
+end
