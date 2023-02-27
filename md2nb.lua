@@ -12,16 +12,19 @@ local notes = pandoc.List()
 
 -- Dispatch table for AST element writers
 local dispatch = {}
-local function write (elem)
+local function write (elem, t, opts)
+   if t == nil then
+      t = '"Text"'
+   end
    if type(elem) == 'Block' or type(elem) == 'Inline' then
       return (
 	 dispatch[elem.t] or dispatch[type(elem)] or
 	 error(('No function to convert %s (%s)'):format(elem.t, type(elem)))
-      )(elem)  -- call dispatch function with element
+      )(elem, t, opts)  -- call dispatch function with element
    elseif type(elem) == 'Inlines' then
-      return layout.concat(elem:map(write), ', ')
+      return 'Cell[TextData[{' .. layout.concat(elem:map(function(e,i) return write(e,t,opts) end), ', ') .. '}], ' .. t .. (opts ~= nil and ', ' .. opts or '') .. ']'
    elseif type(elem) == 'Blocks' then
-      return layout.concat(elem:map(write), ',\n')
+      return layout.concat(elem:map(function(e,i) return write(e,t,opts) end), ',\n')
    end
    error('cannot convert unknown type: ' .. type(element))
 end
@@ -97,7 +100,7 @@ end
 
 function dispatch.Math (m)
    if m.mathtype == 'InlineMath' then
-      return 'Cell[ToExpression["' .. l(m.text) .. '", TeXForm]]'
+      return 'Cell[ToExpression["' .. l(escapeTeX(m.text)) .. '", TeXForm]]'
    else
       return 'Cell[ToExpression["' .. l(escapeTeX(m.text)) .. '", TeXForm]]'
    end
@@ -128,19 +131,21 @@ function dispatch.Plain(p)
    return write(p.content)
 end
 
-function dispatch.Para(p)
-   return 'Cell[TextData[{' .. write(p.content) .. '}], "Text"]'
+function dispatch.Para(p, t, opts)
+   return write(p.content, t, opts)
 end
 
 function dispatch.Header(header)
-   local levels = { 'Section', 'Subsection', 'Subsubsection', 'Text', 'Text' }
-   return 'Cell[TextData[{' ..
-      write(header.content) ..
-      '}], "' .. levels[header.level] .. '"]'
+   local levels = {
+      '"Section"', '"Subsection"', '"Subsubsection"', '"Text"', '"Text"'
+   }
+   return write(header.content, levels[header.level])
 end
 
 function dispatch.BlockQuote(bq)
-   return 'CellGroupData[{' .. write(bq.content) .. '}]'
+   return write(bq.content,
+		'"Text"',
+		'CellMargins->{{60,0},{0,0}}, Background->GrayLevel[0.85]')
 end
 
 function dispatch.HorizontalRule()
@@ -153,9 +158,10 @@ function dispatch.LineBlock(ls)
       .. '</div>'
 end
 
-function dispatch.CodeBlock(cb)
+function dispatch.CodeBlock(cb, t, opts)
    return 'Cell["' .. l(cb.text) .. '", ' ..
-      (cb.classes[1] == 'output' and '"Output"' or '"Input"') .. ']'
+      (cb.classes[1] == 'output' and '"Output"' or '"Input"') ..
+      (opts ~= nil and ', ' .. opts or '') .. ']'
 end
 
 function dispatch.BulletList(blist)
@@ -215,7 +221,9 @@ function Writer(doc, opts)
 	 note
       )
    end
-   local body = 'Notebook[{\n' .. layout.concat(buffer, layout.cr) .. layout.cr .. '}]'
+   local body = 'Notebook[{\n' ..
+      layout.concat(buffer, layout.cr) .. layout.cr ..
+      '}]'
 
    return body:render()
 end

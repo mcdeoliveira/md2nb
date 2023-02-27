@@ -42,5 +42,21 @@ a & b \\ c & d
 \end{bmatrix}
 $$
 
-That's it for now "here and there and everywhere"!
+That's it for now "here, there and everywhere"!
 
+<div>
+Hey, a div is coming!
+</div>
+
+and how about
+
+> Quoting with some formulas
+> ```
+> a + b + c
+> ```
+> and additional text
+
+With some text in the middle
+
+> Quoting with
+> and additional text
