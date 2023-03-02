@@ -33,8 +33,10 @@ local function escapeTeX(s)
    return s:gsub('\\', '\\\\')
 end
 
+local encodeTable = {}
+encodeTable['ö'] = "\\[ODoubleDot]"
 local function escape(s)
-   return s:gsub('"', '\\"'):gsub('’', "'")
+   return s:gsub('"', '\\"'):gsub('’', "'"):gsub("[\0-\x7F\xC2-\xF4][\x80-\xBF]", function (c) return encodeTable[c] end)
 end
 
 function dispatch.Str(s)
